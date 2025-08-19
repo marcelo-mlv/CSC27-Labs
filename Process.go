@@ -13,6 +13,42 @@ import (
 	"time"
 )
 
+// Funções auxiliares para manipulação segura do clock lógico
+// Incrementa clock em ação interna
+func incrementClock() {
+	clockMutex.Lock()
+	clock++
+	clockMutex.Unlock()
+}
+
+// Antes de enviar requests: incrementa clock e retorna valor
+func prepareRequestClock() int {
+	clockMutex.Lock()
+	clock++
+	t := clock
+	clockMutex.Unlock()
+	return t
+}
+
+// Ao receber request ou reply: atualiza clock para 1+max(clock, recebido)
+func updateClockOnReceive(receivedClock int) {
+	clockMutex.Lock()
+	if clock < receivedClock {
+		clock = receivedClock
+	}
+	clock++
+	clockMutex.Unlock()
+}
+
+// Para ler clock atual de forma segura
+func getCurrentClock() int {
+	clockMutex.Lock()
+	t := clock
+	clockMutex.Unlock()
+	return t
+}
+
+
 // Variáveis globais interessantes para o processo
 var err string
 var myPort string          // porta do meu servidor
@@ -64,6 +100,8 @@ func doServerJob() {
 		shared.PrintError(err)
 
 		if msg.Text == "REQUEST" && PID != msg.PID {
+			// Atualiza clock ao receber REQUEST
+			updateClockOnReceive(msg.MsgClock)
 			usingCSMutex.Lock()
 			waitingCSMutex.Lock()
 			clockMutex.Lock()
@@ -78,7 +116,7 @@ func doServerJob() {
 				//	 1. o Relógio Lógico do REQUEST for menor
 				//   2. o PID do REQUEST for menor, caso os Relógios sejam iguais
 				fmt.Println("REPLY enviado para", msg.PID)
-				go doClientJob(pidToIndex[msg.PID], clock, PID, "REPLY")
+				go doClientJob(pidToIndex[msg.PID], getCurrentClock(), PID, "REPLY")
 			} else {
 				fmt.Println("Na fila: REQUEST de", msg.PID)
 				msgQueueMutex.Lock()
@@ -88,8 +126,9 @@ func doServerJob() {
 		}
 
 		if msg.Text == "REPLY" && PID != msg.PID {
-			fmt.Println("	REPLY recebido de", msg.PID)
-			// Incremento da qte. de REPLYs. Lógica completa na main
+			// Atualiza clock ao receber REPLY
+			updateClockOnReceive(msg.MsgClock)
+			fmt.Println("\tREPLY recebido de", msg.PID)
 			repliesReceivedMutex.Lock()
 			RepliesReceived++
 			repliesReceivedMutex.Unlock()
@@ -237,11 +276,11 @@ func main() {
 					WaitingCS = true
 					waitingCSMutex.Unlock()
 					
-					clockMutex.Lock()
+					// Incrementa clock antes de enviar requests
+					t := prepareRequestClock()
 					clockRequestMutex.Lock()
-					clockRequest = clock
+					clockRequest = t
 					clockRequestMutex.Unlock()
-					clockMutex.Unlock()
 
 					repliesReceivedMutex.Lock()
 					RepliesReceived = 0
@@ -258,8 +297,8 @@ func main() {
 					// Incremento do relógio lógico
 					clockMutex.Lock()
 					fmt.Println("Clock Incrementado de", clock, "para", clock+1)
-					clock++
 					clockMutex.Unlock()
+					incrementClock()
 				} else {
 					// input: Qualquer outra coisa
 					// Não é feito nada (ignorar)
