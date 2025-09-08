@@ -15,16 +15,10 @@ import (
 
 // Funções auxiliares para manipulação segura do clock lógico
 // Incrementa clock em ação interna
-func incrementClock() {
+func incrementClock (reason string) int {
 	clockMutex.Lock()
 	clock++
-	clockMutex.Unlock()
-}
-
-// Antes de enviar requests: incrementa clock e retorna valor
-func prepareRequestClock() int {
-	clockMutex.Lock()
-	clock++
+	fmt.Print("Clock increased:", clock, " | Reason:", reason, "\n\n")
 	t := clock
 	clockMutex.Unlock()
 	return t
@@ -37,6 +31,7 @@ func updateClockOnReceive(receivedClock int) {
 		clock = receivedClock
 	}
 	clock++
+	fmt.Print("Clock increased:", clock, " | Reason: Message Received\n\n")
 	clockMutex.Unlock()
 }
 
@@ -133,8 +128,8 @@ func doServerJob() {
 
 		if msg.Text == "REPLY" && PID != msg.PID {
 			// Atualiza clock ao receber REPLY
-			updateClockOnReceive(msg.MsgClock)
 			fmt.Println("\tREPLY recebido de", msg.PID)
+			updateClockOnReceive(msg.MsgClock)
 			repliesReceivedMutex.Lock()
 			RepliesReceived++
 			repliesReceivedMutex.Unlock()
@@ -155,7 +150,11 @@ func doServerJob() {
 			fmt.Println("Entrei na CS")
 			go sendToSR()
 
-			time.Sleep(5 * time.Second)
+			
+			for i := 0; i < 5; i++ {
+				fmt.Print("*\n")
+				time.Sleep(1 * time.Second)
+			}
 
 			UsingCS = false
 			fmt.Println("Saí da CS")
@@ -285,7 +284,7 @@ func main() {
 					waitingCSMutex.Unlock()
 					
 					// Incrementa clock antes de enviar requests
-					t := prepareRequestClock()
+					t := incrementClock("Request Sent")
 					clockRequestMutex.Lock()
 					clockRequest = t
 					clockRequestMutex.Unlock()
@@ -303,10 +302,7 @@ func main() {
 				} else if string(PID) == string(text) {
 					// input: ID do processo
 					// Incremento do relógio lógico
-					clockMutex.Lock()
-					fmt.Println("Clock Incrementado de", clock, "para", clock+1)
-					clockMutex.Unlock()
-					incrementClock()
+					incrementClock("Own PID input")
 				} else {
 					// input: Qualquer outra coisa
 					// Não é feito nada (ignorar)
