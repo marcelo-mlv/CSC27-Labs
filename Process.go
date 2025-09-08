@@ -102,11 +102,17 @@ func doServerJob() {
 		if msg.Text == "REQUEST" && PID != msg.PID {
 			// Atualiza clock ao receber REQUEST
 			updateClockOnReceive(msg.MsgClock)
+			
 			usingCSMutex.Lock()
 			waitingCSMutex.Lock()
 			clockMutex.Lock()
 			cond1 := !UsingCS && !WaitingCS
-			cond2 := WaitingCS && (clock > msg.MsgClock || (clock == msg.MsgClock && msg.PID < PID))
+
+			clockRequestMutex.Lock()
+			myRequestClock := clockRequest
+			clockRequestMutex.Unlock()
+			cond2 := WaitingCS && (myRequestClock > msg.MsgClock || (myRequestClock == msg.MsgClock && msg.PID < PID))
+
 			clockMutex.Unlock()
 			waitingCSMutex.Unlock()
 			usingCSMutex.Unlock()
@@ -201,15 +207,17 @@ func initConnections() {
 	/*Esse 2 tira o nome (no caso Process) e tira a primeira porta (que é a minha). As demais portas são dos outros processos*/
 	CliConn = make([]*net.UDPConn, nServers)
 
-	// MAP (dict) que relaciona os PIDs aos índices do vetor CliConn
-	pidToIndex := make(map[int64]int)
-	for i := 0; i < nServers; i++ {
-		portStr := strings.TrimPrefix(os.Args[2+i], ":")
-		pid, err := strconv.ParseInt(portStr, 10, 64)
-		shared.CheckError(err)
-		pidToIndex[pid] = i
-	}
-
+    // MAP (dict) que relaciona os PIDs aos índices do vetor CliConn
+    pidToIndex = make(map[int64]int)
+    for i := 0; i < nServers; i++ {
+        portStr := strings.TrimPrefix(os.Args[2+i], ":")
+        pid, err := strconv.ParseInt(portStr, 10, 64)
+        shared.CheckError(err)
+        pid = (pid - 10001) // Converte porta para PID (1, 2, 3, ...)
+        fmt.Printf("Mapeando PID %d para índice %d\n", pid, i)
+        pidToIndex[pid] = i
+    }
+	fmt.Printf("\n")
 	pidInt, err := strconv.ParseInt(strings.TrimPrefix(myPort, ":"), 10, 64)
 	shared.CheckError(err)
 	PID = pidInt - 10001
