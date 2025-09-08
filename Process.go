@@ -18,20 +18,20 @@ import (
 func incrementClock (reason string) int {
 	clockMutex.Lock()
 	clock++
-	fmt.Print("Clock increased:", clock, " | Reason:", reason, "\n\n")
+	fmt.Print("Clock increased:", clock, " | Reason: ", reason, "\n\n")
 	t := clock
 	clockMutex.Unlock()
 	return t
 }
 
 // Ao receber request ou reply: atualiza clock para 1+max(clock, recebido)
-func updateClockOnReceive(receivedClock int) {
+func updateClockOnReceive(receivedClock int, reason string) {
 	clockMutex.Lock()
 	if clock < receivedClock {
 		clock = receivedClock
 	}
 	clock++
-	fmt.Print("Clock increased:", clock, " | Reason: Message Received\n\n")
+	fmt.Print("Clock increased:", clock, " | Reason: ", reason, "\n\n")
 	clockMutex.Unlock()
 }
 
@@ -96,7 +96,7 @@ func doServerJob() {
 
 		if msg.Text == "REQUEST" && PID != msg.PID {
 			// Atualiza clock ao receber REQUEST
-			updateClockOnReceive(msg.MsgClock)
+			updateClockOnReceive(msg.MsgClock, "REQUEST Received")
 			
 			usingCSMutex.Lock()
 			waitingCSMutex.Lock()
@@ -119,17 +119,17 @@ func doServerJob() {
 				fmt.Println("REPLY enviado para", msg.PID)
 				go doClientJob(pidToIndex[msg.PID], getCurrentClock(), PID, "REPLY")
 			} else {
-				fmt.Println("Na fila: REQUEST de", msg.PID)
 				msgQueueMutex.Lock()
 				MsgQueue = append(MsgQueue, &msg)
 				msgQueueMutex.Unlock()
+				fmt.Println("Na fila: REQUEST de", msg.PID)
 			}
 		}
 
 		if msg.Text == "REPLY" && PID != msg.PID {
 			// Atualiza clock ao receber REPLY
 			fmt.Println("\tREPLY recebido de", msg.PID)
-			updateClockOnReceive(msg.MsgClock)
+			updateClockOnReceive(msg.MsgClock, "REPLY Received")
 			repliesReceivedMutex.Lock()
 			RepliesReceived++
 			repliesReceivedMutex.Unlock()
@@ -150,7 +150,6 @@ func doServerJob() {
 			fmt.Println("Entrei na CS")
 			go sendToSR()
 
-			
 			for i := 0; i < 5; i++ {
 				fmt.Print("*\n")
 				time.Sleep(1 * time.Second)
@@ -284,7 +283,7 @@ func main() {
 					waitingCSMutex.Unlock()
 					
 					// Incrementa clock antes de enviar requests
-					t := incrementClock("Request Sent")
+					t := incrementClock("REQUEST Sent")
 					clockRequestMutex.Lock()
 					clockRequest = t
 					clockRequestMutex.Unlock()
