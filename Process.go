@@ -166,38 +166,44 @@ func doServerJob() {
 			cond = false
 		}
 		repliesReceivedMutex.Unlock()
+
 		if cond {
-			// UsingCS já está true aqui!
-			fmt.Println("Entrei na CS")
-			go sendToSR()
-
-			time.Sleep(5 * time.Second)
-
-			fmt.Println("Saí da CS")
-
-			// Limpando as mensagens da fila (dando reply em tudo)
-			msgQueueMutex.Lock()
-			for _, queuedMsg := range MsgQueue {
-				fmt.Println("Answering REPLY from ", queuedMsg.PID)
-				go doClientJob(pidToIndex[queuedMsg.PID], clock, PID, "REPLY")
-			}
-			MsgQueue = nil
-			msgQueueMutex.Unlock()
-
-			usingCSMutex.Lock()
-			UsingCS = false
-			usingCSMutex.Unlock()
-
-			repliesReceivedMutex.Lock()
-			RepliesReceived = 0
-			repliesReceivedMutex.Unlock()
+			// Usar goroutine separado para não travar o loop
+			go handleCriticalSection()
 		}
 	}
 }
 
+// Lida com a entrada/uso/liberação da CS em goroutine separado
+func handleCriticalSection() {
+	fmt.Println("Entrei na CS")
+	sendToSR()
+
+	time.Sleep(5 * time.Second)
+
+	fmt.Println("Saí da CS")
+
+	// Limpando as mensagens da fila (dando reply em tudo)
+	msgQueueMutex.Lock()
+	for _, queuedMsg := range MsgQueue {
+		fmt.Println("Answering REPLY from ", queuedMsg.PID)
+		go doClientJob(pidToIndex[queuedMsg.PID], getCurrentClock(), PID, "REPLY")
+	}
+	MsgQueue = nil
+	msgQueueMutex.Unlock()
+
+	usingCSMutex.Lock()
+	UsingCS = false
+	usingCSMutex.Unlock()
+
+	repliesReceivedMutex.Lock()
+	RepliesReceived = 0
+	repliesReceivedMutex.Unlock()
+}
+
 // Envia mensagem de uso para a SR, considerando sua porta fixa :10001
 func sendToSR() {
-	msg := shared.Message{PID: PID, Text: "Using CS", MsgClock: clock}
+	msg := shared.Message{PID: PID, Text: "Using CS", MsgClock: getCurrentClock()}
 	jsonMsg, err := json.Marshal(msg)
 	shared.PrintError(err)
 
@@ -320,14 +326,14 @@ func main() {
 						go doClientJob(j, clockRequest, PID, "REQUEST")
 						clockRequestMutex.Unlock()
 					}
-				} else if string(PID) == string(text) {
+				} else if text == strconv.FormatInt(PID, 10) {
 					// input: ID do processo
 					// Incremento do relógio lógico
 					incrementClock("Own PID input")
 				} else {
 					// input: Qualquer outra coisa
 					// Não é feito nada (ignorar)
-					fmt.Println("Input ignorado: \""+string(text)+"\"", string(PID))
+					fmt.Println("Input ignorado: \""+string(text)+"\"", strconv.FormatInt(PID, 10))
 				}
 			} else {
 				fmt.Println("Closed channel!")
@@ -341,5 +347,4 @@ func main() {
 		// Esperar um pouco
 		time.Sleep(time.Second * 1)
 	}
-
 }
