@@ -15,10 +15,10 @@ import (
 
 // Funções auxiliares para manipulação segura do clock lógico
 // Incrementa clock em ação interna
-func incrementClock (reason string) int {
+func incrementClock(reason string) int {
 	clockMutex.Lock()
 	clock++
-	fmt.Print("Clock increased:", clock, " | Reason: ", reason, "\n\n")
+	fmt.Println("Clock increased:", clock, " | Reason: ", reason, "\n")
 	t := clock
 	clockMutex.Unlock()
 	return t
@@ -31,7 +31,7 @@ func updateClockOnReceive(receivedClock int, reason string) {
 		clock = receivedClock
 	}
 	clock++
-	fmt.Print("Clock increased:", clock, " | Reason: ", reason, "\n\n")
+	fmt.Println("Clock increased:", clock, " | Reason: ", reason, "\n")
 	clockMutex.Unlock()
 }
 
@@ -43,7 +43,6 @@ func getCurrentClock() int {
 	return t
 }
 
-
 // Variáveis globais interessantes para o processo
 var err string
 var myPort string          // porta do meu servidor
@@ -54,21 +53,21 @@ var ServConn *net.UDPConn // conexão do meu servidor (onde recebo
 // mensagens dos outros processos)
 
 // Variáveis de processo
-var PID int64 		  // Process ID (único por arquivo)
-var clock int         // Clock atual do Ciclo (Ti)
-var clockRequest int  // Clock de Request (T)
+var PID int64        // Process ID (único por arquivo)
+var clock int        // Clock atual do Ciclo (Ti)
+var clockRequest int // Clock de Request (T)
 var clockMutex sync.Mutex
 var clockRequestMutex sync.Mutex
 
 // Ti: Clock atual do processo
 // T : Tempo de requisição de CS
 
-var pidToIndex map[int64]int    // Tabela de conversão entre índice de um processo em CliConn e seu PID
-var MsgQueue []*shared.Message  // Fila de mensagens em caso de REPLY não-imediato
+var pidToIndex map[int64]int   // Tabela de conversão entre índice de um processo em CliConn e seu PID
+var MsgQueue []*shared.Message // Fila de mensagens em caso de REPLY não-imediato
 var msgQueueMutex sync.Mutex
-var UsingCS bool         // Se o processo está usando CS
-var WaitingCS bool       // Se o processo está na fila para usar CS
-var RepliesReceived int  // Número de REPLYs recebidas
+var UsingCS bool        // Se o processo está usando CS
+var WaitingCS bool      // Se o processo está na fila para usar CS
+var RepliesReceived int // Número de REPLYs recebidas
 var usingCSMutex sync.Mutex
 var waitingCSMutex sync.Mutex
 var repliesReceivedMutex sync.Mutex
@@ -97,20 +96,23 @@ func doServerJob() {
 		if msg.Text == "REQUEST" && PID != msg.PID {
 			// Atualiza clock ao receber REQUEST
 			updateClockOnReceive(msg.MsgClock, "REQUEST Received")
-			
+
+			// Fazer leitura consistente dos estados
+			var usingCS, waitingCS bool
+			var myRequestClock int
 			usingCSMutex.Lock()
-			waitingCSMutex.Lock()
-			clockMutex.Lock()
-			cond1 := !UsingCS && !WaitingCS
-
-			clockRequestMutex.Lock()
-			myRequestClock := clockRequest
-			clockRequestMutex.Unlock()
-			cond2 := WaitingCS && (myRequestClock > msg.MsgClock || (myRequestClock == msg.MsgClock && msg.PID < PID))
-
-			clockMutex.Unlock()
-			waitingCSMutex.Unlock()
+			usingCS = UsingCS
 			usingCSMutex.Unlock()
+			waitingCSMutex.Lock()
+			waitingCS = WaitingCS
+			waitingCSMutex.Unlock()
+			clockRequestMutex.Lock()
+			myRequestClock = clockRequest
+			clockRequestMutex.Unlock()
+
+			cond1 := !usingCS && !waitingCS
+			cond2 := waitingCS && (myRequestClock > msg.MsgClock || (myRequestClock == msg.MsgClock && msg.PID < PID))
+
 			if cond1 || cond2 {
 				// Envio de REPLY se não estiver usando CS nem na fila
 				// ou se tiver na fila mas:
@@ -121,8 +123,23 @@ func doServerJob() {
 			} else {
 				msgQueueMutex.Lock()
 				MsgQueue = append(MsgQueue, &msg)
+				// Printando a fila atual
+				fmt.Print("Fila atual: [")
+				for i, m := range MsgQueue {
+					if i > 0 {
+						fmt.Print(", ")
+					}
+					fmt.Printf("PID=%d", m.PID)
+				}
+				fmt.Println("]")
 				msgQueueMutex.Unlock()
-				fmt.Println("Na fila: REQUEST de", msg.PID)
+				if usingCS {
+					fmt.Println("Na fila: REQUEST de", msg.PID, "(estou usando a CS)")
+				} else if waitingCS {
+					fmt.Println("Na fila: REQUEST de", msg.PID, "(estou esperando a CS)")
+				} else {
+					fmt.Println("Na fila: REQUEST de", msg.PID)
+				}
 			}
 		}
 
@@ -135,36 +152,41 @@ func doServerJob() {
 			repliesReceivedMutex.Unlock()
 		}
 
+		var cond bool
 		repliesReceivedMutex.Lock()
-		cond := RepliesReceived == nServers
+		if RepliesReceived == nServers {
+			waitingCSMutex.Lock()
+			usingCSMutex.Lock()
+			WaitingCS = false
+			UsingCS = true
+			waitingCSMutex.Unlock()
+			usingCSMutex.Unlock()
+			cond = true
+		} else {
+			cond = false
+		}
 		repliesReceivedMutex.Unlock()
 		if cond {
-			// Uso da CS,
-			usingCSMutex.Lock()
-			UsingCS = true
-			usingCSMutex.Unlock()
-			waitingCSMutex.Lock()
-			WaitingCS = false
-			waitingCSMutex.Unlock()
-
+			// UsingCS já está true aqui!
 			fmt.Println("Entrei na CS")
 			go sendToSR()
 
-			for i := 0; i < 5; i++ {
-				fmt.Print("*\n")
-				time.Sleep(1 * time.Second)
-			}
+			time.Sleep(5 * time.Second)
 
-			UsingCS = false
 			fmt.Println("Saí da CS")
 
 			// Limpando as mensagens da fila (dando reply em tudo)
 			msgQueueMutex.Lock()
 			for _, queuedMsg := range MsgQueue {
+				fmt.Println("Answering REPLY from ", queuedMsg.PID)
 				go doClientJob(pidToIndex[queuedMsg.PID], clock, PID, "REPLY")
 			}
 			MsgQueue = nil
 			msgQueueMutex.Unlock()
+
+			usingCSMutex.Lock()
+			UsingCS = false
+			usingCSMutex.Unlock()
 
 			repliesReceivedMutex.Lock()
 			RepliesReceived = 0
@@ -205,16 +227,16 @@ func initConnections() {
 	/*Esse 2 tira o nome (no caso Process) e tira a primeira porta (que é a minha). As demais portas são dos outros processos*/
 	CliConn = make([]*net.UDPConn, nServers)
 
-    // MAP (dict) que relaciona os PIDs aos índices do vetor CliConn
-    pidToIndex = make(map[int64]int)
-    for i := 0; i < nServers; i++ {
-        portStr := strings.TrimPrefix(os.Args[2+i], ":")
-        pid, err := strconv.ParseInt(portStr, 10, 64)
-        shared.CheckError(err)
-        pid = (pid - 10001) // Converte porta para PID (1, 2, 3, ...)
-        fmt.Printf("Mapeando PID %d para índice %d\n", pid, i)
-        pidToIndex[pid] = i
-    }
+	// MAP (dict) que relaciona os PIDs aos índices do vetor CliConn
+	pidToIndex = make(map[int64]int)
+	for i := 0; i < nServers; i++ {
+		portStr := strings.TrimPrefix(os.Args[2+i], ":")
+		pid, err := strconv.ParseInt(portStr, 10, 64)
+		shared.CheckError(err)
+		pid = (pid - 10001) // Converte porta para PID (1, 2, 3, ...)
+		fmt.Printf("Mapeando PID %d para índice %d\n", pid, i)
+		pidToIndex[pid] = i
+	}
 	fmt.Printf("\n")
 	pidInt, err := strconv.ParseInt(strings.TrimPrefix(myPort, ":"), 10, 64)
 	shared.CheckError(err)
@@ -281,7 +303,7 @@ func main() {
 					}
 					WaitingCS = true
 					waitingCSMutex.Unlock()
-					
+
 					// Incrementa clock antes de enviar requests
 					t := incrementClock("REQUEST Sent")
 					clockRequestMutex.Lock()
